@@ -28,7 +28,7 @@ import { ensureWellFormed } from './text-safe.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2000-01-01T00:00:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-07-04T11:00:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
