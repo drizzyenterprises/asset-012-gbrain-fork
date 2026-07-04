@@ -188,7 +188,7 @@ describe('gbrain extract --stale', () => {
     await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));
     // Microsecond-precision updated_at, recent (after LINK_EXTRACTOR_VERSION_TS) so the
     // version arm doesn't fire — the edited arm is what must clear.
-    await engine.executeRaw(`UPDATE pages SET updated_at = '2026-06-02 08:18:58.999166+00'`);
+    await engine.executeRaw(`UPDATE pages SET updated_at = '2026-07-04T10:00:00.999166+00'`);
     expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(2);
 
     await runExtract(engine, ['--stale']);
@@ -288,5 +288,30 @@ describe('gbrain extract --stale', () => {
     }
     expect(exited).toBe(true);
     expect(msg).toContain('DB-source only');
+  });
+
+  test('Fix #1: extract --stale resolves bare wikilinks when globalBasename is on', async () => {
+    // Regression: before Fix #1, extractStaleFromDB used nullResolver (no
+    // resolveBasenameMatches), so bare [[name]] wikilinks were silently dropped
+    // even when globalBasename was enabled. After Fix #1, the stale path uses
+    // the real resolver and passes { globalBasename } opts, mirroring extractLinksFromDB.
+    process.env.GBRAIN_LINK_RESOLUTION_GLOBAL_BASENAME = '1';
+    try {
+      await engine.putPage('projects/struktura', { type: 'project', title: 'Struktura', compiled_truth: 'A project.', timeline: '' });
+      await engine.putPage('concepts/knowledge-graph', {
+        type: 'concept', title: 'Knowledge Graph',
+        compiled_truth: 'This relates to [[struktura]].',
+        timeline: '',
+      });
+
+      await runExtract(engine, ['--stale']);
+
+      const links = await engine.getLinks('concepts/knowledge-graph');
+      const basenameLink = links.find(l => l.to_slug === 'projects/struktura');
+      expect(basenameLink).toBeDefined();
+      expect(basenameLink!.link_source).toBe('wikilink-resolved');
+    } finally {
+      delete process.env.GBRAIN_LINK_RESOLUTION_GLOBAL_BASENAME;
+    }
   });
 });
