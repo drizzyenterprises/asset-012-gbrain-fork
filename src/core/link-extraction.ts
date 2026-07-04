@@ -28,7 +28,7 @@ import { ensureWellFormed } from './text-safe.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-05-31T00:00:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2026-07-04T09:00:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -83,7 +83,7 @@ export type LinkResolutionType = 'qualified' | 'unqualified';
  *   - Our domain extensions: tech, finance, personal, openclaw (domain-organized wikis)
  *   - Our entity prefix: entities (we kept some legacy entities/projects/ pages)
  */
-const DIR_PATTERN = '(?:people|companies|meetings|concepts|deal|civic|project|projects|source|media|yc|tech|finance|personal|openclaw|entities)';
+const DIR_PATTERN = '(?:people|companies|meetings|concepts|deal|civic|project|projects|source|media|yc|tech|finance|personal|openclaw|entities|ops)';
 
 /**
  * Match `[Name](path)` markdown links pointing to entity directories.
@@ -833,7 +833,12 @@ export interface SlugResolver {
  * final `/`-segment (or the whole slug when it has no `/`).
  */
 export function normalizeBasename(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
+  // Fix #2 Edit E: extract the path tail before normalizing so path-style
+  // inputs like "ops/changes/2026-05-01-pointer-..." normalize to the tail
+  // segment ("2026-05-01-pointer-...") matching the tail-keyed index.
+  // If there's no slash, this is a no-op (whole string is the tail).
+  const tail = s.includes('/') ? s.slice(s.lastIndexOf('/') + 1) : s;
+  return tail.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/\s+/g, '-');
 }
 
 /** Stable order: shorter slug first (likely closer to brain root), then lexical. */
@@ -865,7 +870,17 @@ export function queryBasenameIndex(idx: Map<string, string[]>, name: string): st
   if (!name || typeof name !== 'string') return [];
   const trimmed = name.trim();
   if (!trimmed) return [];
-  const hit = idx.get(trimmed) ?? idx.get(trimmed.toLowerCase()) ?? idx.get(normalizeBasename(trimmed));
+  // Fix #2 Edit E: also try extracting the path tail for path-style inputs.
+  // Raw tail and lowercase tail are tried BEFORE the slugified/normalized
+  // fallback to preserve exact-tail specificity and avoid collision broadening
+  // (e.g. "dir/foo_bar" normalizes to "foobar" which could match a different
+  // slug before the exact raw tail "foo_bar" is checked).
+  const tail = trimmed.includes('/') ? trimmed.slice(trimmed.lastIndexOf('/') + 1) : null;
+  const hit = idx.get(trimmed)
+    ?? idx.get(trimmed.toLowerCase())
+    ?? (tail ? idx.get(tail) : null)
+    ?? (tail ? idx.get(tail.toLowerCase()) : null)
+    ?? idx.get(normalizeBasename(trimmed));
   return hit ? [...hit].sort(basenameSort) : [];
 }
 
