@@ -64,11 +64,11 @@ describe('engine: stale-page extraction methods', () => {
   test('countStalePagesForExtraction: version arm flags pre-version stamps', async () => {
     await engine.putPage('people/alice', personPage('Alice'));
     // Stamp with an OLD timestamp (before LINK_EXTRACTOR_VERSION_TS).
-    await engine.markPagesExtractedBatch([{ slug: 'people/alice', source_id: 'default' }], '2000-01-01T00:00:00Z');
+    await engine.markPagesExtractedBatch([{ slug: 'people/alice', source_id: 'default' }], '1999-01-01T00:00:00Z');
     // Without versionTs: only NULL/edited arms → not stale (stamp >= updated? no:
-    // stamp is 2000, updated is now → updated_at > stamp → STALE via edited arm).
+    // stamp is 1999, updated is now → updated_at > stamp → STALE via edited arm).
     // So set updated_at back too, isolating the version arm:
-    await engine.executeRaw(`UPDATE pages SET updated_at = '2000-01-01T00:00:00Z' WHERE slug = 'people/alice'`);
+    await engine.executeRaw(`UPDATE pages SET updated_at = '1999-01-01T00:00:00Z' WHERE slug = 'people/alice'`);
     expect(await engine.countStalePagesForExtraction()).toBe(0); // no version, stamp==updated, not NULL
     expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(1); // version arm
   });
@@ -188,7 +188,7 @@ describe('gbrain extract --stale', () => {
     await engine.putPage('companies/acme', companyPage('Acme', '[Alice](people/alice) advises [Acme](companies/acme).'));
     // Microsecond-precision updated_at, recent (after LINK_EXTRACTOR_VERSION_TS) so the
     // version arm doesn't fire — the edited arm is what must clear.
-    await engine.executeRaw(`UPDATE pages SET updated_at = '2026-07-04T10:00:00.999166+00'`);
+    await engine.executeRaw(`UPDATE pages SET updated_at = '2026-01-01 00:00:00.999166+00'`);
     expect(await engine.countStalePagesForExtraction({ versionTs: LINK_EXTRACTOR_VERSION_TS })).toBe(2);
 
     await runExtract(engine, ['--stale']);

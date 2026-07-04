@@ -28,7 +28,7 @@ import { ensureWellFormed } from './text-safe.ts';
  * OR updated_at > links_extracted_at`. It is an ISO-8601 string (NOT a number) —
  * the column is TIMESTAMPTZ and the predicate binds it as `::timestamptz`.
  */
-export const LINK_EXTRACTOR_VERSION_TS = '2026-07-04T09:00:00Z';
+export const LINK_EXTRACTOR_VERSION_TS = '2000-01-01T00:00:00Z';
 
 // ─── Entity references ──────────────────────────────────────────
 
@@ -512,8 +512,12 @@ export async function extractPageLinks(
     // narrative prose where a partner's investment verbs appear once and
     // then portfolio companies are listed in subsequent sentences.
     const context = idx >= 0 ? excerpt(content, idx, 240) : ref.name;
+    // Fix #3: slugify the wikilink target so Obsidian-style titles with
+    // spaces/uppercase (e.g. [[ops/services/Pointer Agent]]) resolve to
+    // the kebab-case page slug (ops/services/pointer-agent).
+    const targetSlug = slugifyWikilinkTarget(ref.slug);
     candidates.push({
-      targetSlug: ref.slug,
+      targetSlug,
       linkType: inferLinkType(pageType, context, content, ref.slug),
       context,
       linkSource: 'markdown',
@@ -882,6 +886,37 @@ export function queryBasenameIndex(idx: Map<string, string[]>, name: string): st
     ?? (tail ? idx.get(tail.toLowerCase()) : null)
     ?? idx.get(normalizeBasename(trimmed));
   return hit ? [...hit].sort(basenameSort) : [];
+}
+
+// ─── Wikilink target slugifier ─────────────────────────────────
+/**
+ * Fix #3: slugify a DIR_PATTERN wikilink target that contains spaces or
+ * uppercase letters (e.g. `[[ops/services/Pointer Agent]]` →
+ * `ops/services/pointer-agent`). Pass 2b (unqualified wikilinks with a
+ * DIR_PATTERN prefix) emits the literal text inside `[[...]]` as the
+ * target slug. Obsidian-style titles with spaces/caps don't match the
+ * kebab-case page slug, so `resolveCandidateSources` drops the edge.
+ *
+ * If the input is already a valid slug (lowercase, alnum + hyphens +
+ * slashes), it's returned unchanged — the common case is a no-op.
+ */
+function slugifyWikilinkTarget(target: string): string {
+  // Fast path: already a valid slug (lowercase, alnum + hyphens + slashes).
+  if (/^[a-z0-9][a-z0-9/-]*[a-z0-9]$/.test(target) || /^[a-z0-9]$/.test(target)) {
+    return target;
+  }
+  // Split on '/', slugify each segment, rejoin.
+  return target
+    .split('/')
+    .map(seg => seg
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, ''))
+    .filter(Boolean)
+    .join('/');
 }
 
 /**
