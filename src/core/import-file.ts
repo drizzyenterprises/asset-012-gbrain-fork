@@ -883,6 +883,19 @@ export async function importFromContent(
     }
   }
 
+  // Post-write read-back verification (WO-20260706-RJQD).
+  //
+  // After the transaction commits, the page MUST be resolvable via getPage.
+  // If the read-back returns null (or a stale content_hash), the operation
+  // fails LOUDLY — a non-zero exit + error surfaced to the ingest log — rather
+  // than reporting success. A write is not "done" until it is readable.
+  //
+  // This catches the silent-desync class: the page file exists on disk (or the
+  // git commit landed) but the DB index silently never picked it up. Without
+  // this guard, the operation reports success and the page is invisible to all
+  // reads (get_page, search, query) until someone notices the gap manually.
+  await verifyPageReadable(engine, slug, hash, sourceId, 'importFromContent');
+
   return {
     slug,
     status: 'imported',
@@ -891,6 +904,43 @@ export async function importFromContent(
     ...(pageQuarantined ? { quarantined: true } : {}),
     ...(pageFlagged ? { flagged: true, flag_reason: pageFlagReason } : {}),
   };
+}
+
+/**
+ * Post-write read-back assertion (WO-20260706-RJQD).
+ *
+ * After a page write transaction commits, verify the page is resolvable via
+ * `getPage` and that its `content_hash` matches the hash we just wrote. If the
+ * read-back fails (page not found or stale hash), throw a loud error so the
+ * caller surfaces the failure instead of reporting success.
+ *
+ * This is the write-then-verify guard on the sync/write path: a write is not
+ * "done" until it is readable back.
+ */
+async function verifyPageReadable(
+  engine: BrainEngine,
+  slug: string,
+  expectedHash: string,
+  sourceId: string | undefined,
+  caller: string,
+): Promise<void> {
+  const readBack = await engine.getPage(slug, sourceId ? { sourceId } : undefined);
+  console.error();
+  if (!readBack) {
+    throw new Error(
+      `[${caller}] post-write read-back failed: page '${slug}' not found after write ` +
+      `(source: ${sourceId ?? 'default'}). The page was written but the DB index ` +
+      `did not pick it up. This indicates a silent desync — the operation must fail loudly.`,
+    );
+  }
+  if (readBack.content_hash !== expectedHash) {
+    throw new Error(
+      `[${caller}] post-write read-back failed: page '${slug}' has stale content_hash ` +
+      `(expected ${expectedHash.slice(0, 12)}, got ${(readBack.content_hash ?? '').slice(0, 12)}; ` +
+      `source: ${sourceId ?? 'default'}). The page was written but the DB index ` +
+      `has a stale row. This indicates a silent desync — the operation must fail loudly.`,
+    );
+  }
 }
 
 /**
@@ -1185,6 +1235,11 @@ export async function importCodeFile(
       await tx.deleteChunks(slug, txOpts);
     }
   });
+
+  // Post-write read-back verification (WO-20260706-RJQD).
+  // Same guard as the markdown path: a code page write is not "done" until
+  // it is readable back via getPage.
+  await verifyPageReadable(engine, slug, hash, sourceId, 'importCodeFile');
 
   // v0.20.0 Cathedral II Layer 5 (A1): extracted call-site edges persist
   // in code_edges_symbol (unresolved — we don't attempt within-file target

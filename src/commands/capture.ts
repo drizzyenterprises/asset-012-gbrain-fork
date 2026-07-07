@@ -31,6 +31,8 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { hostname } from 'node:os';
 import matter from 'gray-matter';
 import type { BrainEngine } from '../core/engine.ts';
 import { loadConfig, isThinClient } from '../core/config.ts';
@@ -335,6 +337,32 @@ function printReceipt(result: CaptureResult, quiet: boolean, json: boolean): voi
   console.log(`  captured_at:   ${result.captured_at}`);
 }
 
+async function resolveAgentIdentity(engine: BrainEngine): Promise<{ name: string; email: string }> {
+  const envName = process.env.GBRAIN_AGENT_NAME;
+  const envEmail = process.env.GBRAIN_AGENT_EMAIL;
+  if (envName && envEmail) return { name: envName, email: envEmail };
+
+  try {
+    const repoPath = await engine.getConfig('sync.repo_path');
+    if (repoPath) {
+      const gitName = execFileSync('git', ['-C', repoPath, 'config', '--get', 'user.name'], {
+        encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+      }).trim();
+      const gitEmail = execFileSync('git', ['-C', repoPath, 'config', '--get', 'user.email'], {
+        encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+      }).trim();
+      if (gitName && gitEmail && !(gitName === 'gbrain' && gitEmail === 'gbrain@localhost')) {
+        return { name: gitName, email: gitEmail };
+      }
+    }
+  } catch {
+    // git not available or not configured; fall back to OS user below.
+  }
+
+  const osUser = process.env.USER || process.env.USERNAME || 'unknown';
+  return { name: osUser, email: `${osUser}@${hostname()}` };
+}
+
 export async function runCapture(engine: BrainEngine | null, args: string[]): Promise<void> {
   const parsed = parseArgs(args);
   if ('help' in parsed) {
@@ -512,6 +540,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
     console.error('gbrain capture: put_page operation missing (gbrain build issue)');
     process.exit(1);
   }
+  const agentIdentity = await resolveAgentIdentity(engine);
   const ctx: OperationContext = {
     engine,
     config: cfg ?? { engine: 'pglite' as const },
@@ -522,6 +551,7 @@ export async function runCapture(engine: BrainEngine | null, args: string[]): Pr
     },
     dryRun: false,
     remote: false,
+    agentIdentity,
     // v0.39.3.0 CV15: thread the resolved source from the canonical 6-tier
     // chain (was `parsed.source ?? 'default'` pre-fix, which silently
     // ignored env / dotfile / local_path / brain_default tiers — divergent
