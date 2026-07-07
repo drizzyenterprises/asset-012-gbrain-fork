@@ -925,8 +925,20 @@ async function verifyPageReadable(
   caller: string,
 ): Promise<void> {
   const readBack = await engine.getPage(slug, sourceId ? { sourceId } : undefined);
-  console.error();
   if (!readBack) {
+    // Log to ingest_log before throwing so the failure is durable and
+    // agent-inspectable, not just a transient stderr message.
+    try {
+      await engine.logIngest({
+        source_type: 'write-verify-guard',
+        source_ref: slug,
+        pages_updated: [],
+        summary: `[${caller}] post-write read-back failed: page '${slug}' not found after write (source: ${sourceId ?? 'default'}). Silent desync — DB index did not pick up the write.`,
+        ...(sourceId ? { source_id: sourceId } : {}),
+      });
+    } catch {
+      // Best-effort: don't mask the original failure if logIngest itself fails.
+    }
     throw new Error(
       `[${caller}] post-write read-back failed: page '${slug}' not found after write ` +
       `(source: ${sourceId ?? 'default'}). The page was written but the DB index ` +
@@ -934,6 +946,17 @@ async function verifyPageReadable(
     );
   }
   if (readBack.content_hash !== expectedHash) {
+    try {
+      await engine.logIngest({
+        source_type: 'write-verify-guard',
+        source_ref: slug,
+        pages_updated: [],
+        summary: `[${caller}] post-write read-back failed: page '${slug}' has stale content_hash (expected ${expectedHash.slice(0, 12)}, got ${(readBack.content_hash ?? '').slice(0, 12)}; source: ${sourceId ?? 'default'}). Silent desync — DB index has a stale row.`,
+        ...(sourceId ? { source_id: sourceId } : {}),
+      });
+    } catch {
+      // Best-effort.
+    }
     throw new Error(
       `[${caller}] post-write read-back failed: page '${slug}' has stale content_hash ` +
       `(expected ${expectedHash.slice(0, 12)}, got ${(readBack.content_hash ?? '').slice(0, 12)}; ` +

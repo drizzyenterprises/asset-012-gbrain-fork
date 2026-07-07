@@ -207,6 +207,16 @@ describe('post-write read-back verification (WO-20260706-RJQD)', () => {
     // Intercept getPage to simulate index miss on the read-back.
     // Use a slug-specific counter to avoid interference from other tests
     // that might call getPage on the same engine.
+    //
+    // The put_page handler calls getPage via importFromContent, but it also
+    // makes its own getPage call at operations.ts:818 (existing-page check)
+    // BEFORE importFromContent runs. So the call sequence for put_page is:
+    //   1. operations.ts:818 — put_page's own existing check
+    //   2. import-file.ts:561 — importFromContent's existing check
+    //   3. import-file.ts:927 — verifyPageReadable read-back (the one we intercept)
+    // Tests 1-3 call importFromContent directly (no put_page pre-check), so
+    // their read-back is call 2. Test 4 goes through put_page, so the
+    // read-back is call 3.
     const slugCallCount = new Map<string, number>();
     const originalGetPage = engine.getPage.bind(engine);
     const interceptingGetPage = async (
@@ -215,11 +225,9 @@ describe('post-write read-back verification (WO-20260706-RJQD)', () => {
     ) => {
       const count = (slugCallCount.get(s) ?? 0) + 1;
       slugCallCount.set(s, count);
-      // The put_page handler calls getPage via importFromContent:
-      // 1. existing check (line 561)
-      // 2. read-back (verifyPageReadable)
-      // Return null for the read-back call (callCount == 2 for this slug).
-      if (s === slug && count === 2) {
+      // Intercept the read-back call (callCount == 3 for this slug,
+      // because put_page adds its own existing-check before importFromContent).
+      if (s === slug && count === 3) {
         return null;
       }
       return originalGetPage(s, opts);
