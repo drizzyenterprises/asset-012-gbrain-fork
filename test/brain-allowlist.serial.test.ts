@@ -19,6 +19,7 @@ import {
 } from '../src/core/minions/tools/brain-allowlist.ts';
 import type { GBrainConfig } from '../src/core/config.ts';
 import type { ToolCtx } from '../src/core/minions/types.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: PGLiteEngine;
 const config: GBrainConfig = { engine: 'pglite' } as GBrainConfig;
@@ -132,26 +133,24 @@ describe('buildBrainTools', () => {
     expect(res).toBeTruthy();
   });
 
-  test('subagent identity resolves env vars first, OS user as fallback', () => {
-    const prevName = process.env.GBRAIN_AGENT_NAME;
-    const prevEmail = process.env.GBRAIN_AGENT_EMAIL;
-    try {
-      process.env.GBRAIN_AGENT_NAME = 'Test Agent';
-      process.env.GBRAIN_AGENT_EMAIL = 'test-agent@example.com';
-      expect(__testing.resolveSubagentIdentity()).toEqual({
-        name: 'Test Agent',
-        email: 'test-agent@example.com',
-      });
-
-      delete process.env.GBRAIN_AGENT_NAME;
-      delete process.env.GBRAIN_AGENT_EMAIL;
-      const fallback = __testing.resolveSubagentIdentity();
-      expect(fallback.name.length).toBeGreaterThan(0);
-      expect(fallback.email).toContain('@');
-    } finally {
-      if (prevName === undefined) delete process.env.GBRAIN_AGENT_NAME; else process.env.GBRAIN_AGENT_NAME = prevName;
-      if (prevEmail === undefined) delete process.env.GBRAIN_AGENT_EMAIL; else process.env.GBRAIN_AGENT_EMAIL = prevEmail;
-    }
+  test('subagent identity resolves env vars first, OS user as fallback', async () => {
+    await withEnv(
+      { GBRAIN_AGENT_NAME: 'Test Agent', GBRAIN_AGENT_EMAIL: 'test-agent@example.com' },
+      () => {
+        expect(__testing.resolveSubagentIdentity()).toEqual({
+          name: 'Test Agent',
+          email: 'test-agent@example.com',
+        });
+      },
+    );
+    await withEnv(
+      { GBRAIN_AGENT_NAME: undefined, GBRAIN_AGENT_EMAIL: undefined, USER: 'worker-user' },
+      () => {
+        const fallback = __testing.resolveSubagentIdentity();
+        expect(fallback.name).toBe('worker-user');
+        expect(fallback.email).toMatch(/^worker-user@.+/);
+      },
+    );
   });
 
   test('execute() on put_page with out-of-namespace slug throws permission_denied', async () => {
