@@ -19,6 +19,7 @@ import {
 } from '../src/core/minions/tools/brain-allowlist.ts';
 import type { GBrainConfig } from '../src/core/config.ts';
 import type { ToolCtx } from '../src/core/minions/types.ts';
+import { withEnv } from './helpers/with-env.ts';
 
 let engine: PGLiteEngine;
 const config: GBrainConfig = { engine: 'pglite' } as GBrainConfig;
@@ -130,6 +131,26 @@ describe('buildBrainTools', () => {
       ctx,
     );
     expect(res).toBeTruthy();
+  });
+
+  test('subagent identity resolves env vars first, OS user as fallback', async () => {
+    await withEnv(
+      { GBRAIN_AGENT_NAME: 'Test Agent', GBRAIN_AGENT_EMAIL: 'test-agent@example.com' },
+      () => {
+        expect(__testing.resolveSubagentIdentity()).toEqual({
+          name: 'Test Agent',
+          email: 'test-agent@example.com',
+        });
+      },
+    );
+    await withEnv(
+      { GBRAIN_AGENT_NAME: undefined, GBRAIN_AGENT_EMAIL: undefined, USER: 'worker-user' },
+      () => {
+        const fallback = __testing.resolveSubagentIdentity();
+        expect(fallback.name).toBe('worker-user');
+        expect(fallback.email).toMatch(/^worker-user@.+/);
+      },
+    );
   });
 
   test('execute() on put_page with out-of-namespace slug throws permission_denied', async () => {

@@ -22,6 +22,7 @@
  * level; repeats re-derive the same embedding over identical content.
  */
 
+import { hostname } from 'node:os';
 import type { BrainEngine } from '../../engine.ts';
 import type { GBrainConfig } from '../../config.ts';
 import { operations } from '../../operations.ts';
@@ -206,6 +207,23 @@ interface OpContextDeps {
   allowedSlugPrefixes?: readonly string[];
 }
 
+/**
+ * Resolve the write-attribution identity for subagent-executed ops.
+ * put_page rejects anonymous writes (operations.ts identity gate), but this
+ * context never carried an identity, so every dream-synthesize page write
+ * died with permission_denied. Mirrors the cli.ts resolution minus the git
+ * lookup (this path is sync and runs inside the worker): GBRAIN_AGENT_NAME +
+ * GBRAIN_AGENT_EMAIL env, else the OS user — machine-run jobs always have an
+ * attributable author, matching pre-gate behavior.
+ */
+function resolveSubagentIdentity(): { name: string; email: string } {
+  const envName = process.env.GBRAIN_AGENT_NAME;
+  const envEmail = process.env.GBRAIN_AGENT_EMAIL;
+  if (envName && envEmail) return { name: envName, email: envEmail };
+  const osUser = process.env.USER || process.env.USERNAME || 'unknown';
+  return { name: osUser, email: `${osUser}@${hostname()}` };
+}
+
 function buildOpContext(deps: OpContextDeps): OperationContext {
   return {
     engine: deps.engine,
@@ -221,6 +239,7 @@ function buildOpContext(deps: OpContextDeps): OperationContext {
     jobId: deps.jobId,
     subagentId: deps.subagentId,
     viaSubagent: true,           // FAIL-CLOSED: put_page etc. enforce namespace
+    agentIdentity: resolveSubagentIdentity(),
     brainId: deps.brainId,
     allowedSlugPrefixes: deps.allowedSlugPrefixes
       ? [...deps.allowedSlugPrefixes]
@@ -313,4 +332,5 @@ export const __testing = {
   paramsToInputSchema,
   namespacedPutPageSchema,
   ANTHROPIC_NAME_RE,
+  resolveSubagentIdentity,
 };
