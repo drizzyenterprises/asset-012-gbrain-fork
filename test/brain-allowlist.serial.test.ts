@@ -132,6 +132,28 @@ describe('buildBrainTools', () => {
     expect(res).toBeTruthy();
   });
 
+  test('subagent identity resolves env vars first, OS user as fallback', () => {
+    const prevName = process.env.GBRAIN_AGENT_NAME;
+    const prevEmail = process.env.GBRAIN_AGENT_EMAIL;
+    try {
+      process.env.GBRAIN_AGENT_NAME = 'Test Agent';
+      process.env.GBRAIN_AGENT_EMAIL = 'test-agent@example.com';
+      expect(__testing.resolveSubagentIdentity()).toEqual({
+        name: 'Test Agent',
+        email: 'test-agent@example.com',
+      });
+
+      delete process.env.GBRAIN_AGENT_NAME;
+      delete process.env.GBRAIN_AGENT_EMAIL;
+      const fallback = __testing.resolveSubagentIdentity();
+      expect(fallback.name.length).toBeGreaterThan(0);
+      expect(fallback.email).toContain('@');
+    } finally {
+      if (prevName === undefined) delete process.env.GBRAIN_AGENT_NAME; else process.env.GBRAIN_AGENT_NAME = prevName;
+      if (prevEmail === undefined) delete process.env.GBRAIN_AGENT_EMAIL; else process.env.GBRAIN_AGENT_EMAIL = prevEmail;
+    }
+  });
+
   test('execute() on put_page with out-of-namespace slug throws permission_denied', async () => {
     const tools = buildBrainTools({ subagentId: 42, engine, config });
     const putPage = tools.find(t => t.name === 'brain_put_page');
