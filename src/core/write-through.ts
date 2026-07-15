@@ -59,6 +59,7 @@ export interface WritePageThroughOpts {
   /** Merged over the page's own frontmatter at render time (e.g. provenance). */
   frontmatterOverrides?: Record<string, unknown>;
   logger?: WriteThroughLogger;
+  agentIdentity?: { name: string; email: string };
 }
 
 /**
@@ -155,6 +156,38 @@ export async function writePageThrough(
         // best-effort cleanup; surface the original write error below
       }
       throw writeErr;
+    }
+
+    // Stage and commit with the originating agent identity as author.
+    // Non-fatal: the DB row + file write are the durable sink; sync can still
+    // commit later if this repo is not git-backed or has no staged changes.
+    if (opts.agentIdentity) {
+      try {
+        const { execFileSync } = await import('child_process');
+        const repoDir = dirname(filePath);
+        const gitRoot = execFileSync('git', ['-C', repoDir, 'rev-parse', '--show-toplevel'], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+        }).trim();
+        execFileSync('git', ['-C', gitRoot, 'add', filePath], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+        });
+        try {
+          execFileSync('git', ['-C', gitRoot, 'diff', '--cached', '--quiet', '--', filePath], {
+            encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+          });
+        } catch (diffErr: unknown) {
+          const status = typeof diffErr === 'object' && diffErr !== null && 'status' in diffErr
+            ? (diffErr as { status?: number }).status
+            : undefined;
+          if (status !== 1) throw diffErr;
+          const authorStr = `${opts.agentIdentity.name} <${opts.agentIdentity.email}>`;
+          execFileSync('git', ['-C', gitRoot, 'commit', '--author', authorStr, '-m', `brain: update ${slug}`], {
+            encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
+          });
+        }
+      } catch (e) {
+        opts.logger?.warn(`[write-through] git commit failed for ${slug}: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     return { written: true, path: filePath };

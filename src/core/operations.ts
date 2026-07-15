@@ -299,6 +299,8 @@ export interface OperationContext {
    * remote/untrusted (defense in depth in case the type is bypassed via cast).
    */
   remote: boolean;
+  /** v0.42.x: originating agent/session identity for write attribution. Required for put_page. */
+  agentIdentity?: { name: string; email: string };
   /**
    * Subagent runtime context (v0.16+). Set by the subagent tool dispatcher when
    * dispatching an op as a tool call from an LLM loop. Used to enforce per-op
@@ -749,11 +751,21 @@ const put_page: Operation = {
     source_kind: { type: 'string', required: false, description: 'Ingestion channel taxonomy (capture-cli | put_page | webhook | …). Remote callers: SERVER-STAMPED, client value ignored.' },
     source_uri: { type: 'string', required: false, description: 'Original URI/path/message-id the event carried. Remote callers: SERVER-STAMPED null.' },
     ingested_via: { type: 'string', required: false, description: 'Richer label paired with source_kind. Remote callers: SERVER-STAMPED.' },
+    override: { type: 'boolean', required: false, description: 'Force overwrite of a protected page. Requires --reason.' },
+    reason: { type: 'string', required: false, description: 'Human-readable reason for overriding protected-page guard. Required with --override.' },
   },
   mutating: true,
   scope: 'write',
   handler: async (ctx, p) => {
     const slug = p.slug as string;
+
+    // Identity gate: no anonymous writes.
+    if (!ctx.agentIdentity || !ctx.agentIdentity.name || !ctx.agentIdentity.email) {
+      throw new OperationError(
+        'permission_denied',
+        'put_page requires a resolvable agent identity (agentIdentity.name + agentIdentity.email). Set GBRAIN_AGENT_NAME and GBRAIN_AGENT_EMAIL, or configure git user.name/user.email in the brain repo.',
+      );
+    }
 
     // v0.39.3.0 CV6 trust gate for provenance write-through (WARN-8).
     // Only trusted LOCAL callers (ctx.remote === false — capture CLI,
@@ -813,6 +825,27 @@ const put_page: Operation = {
         if (!slug.startsWith(prefix) || slug.length === prefix.length) {
           throw new OperationError('permission_denied', `put_page via subagent must write under '${prefix}...'`);
         }
+      }
+    }
+
+    const existingPage = await ctx.engine.getPage(slug, sourceScopeOpts(ctx));
+    if (existingPage) {
+      let linkedFromDecision = false;
+      if (!slug.startsWith('decisions/')) {
+        const backlinks = await ctx.engine.getBacklinks(slug, sourceScopeOpts(ctx));
+        linkedFromDecision = backlinks.some((b) => b.from_slug.startsWith('decisions/'));
+      }
+      const protectedPage = slug.startsWith('decisions/') || linkedFromDecision;
+      if (protectedPage) {
+        const reason = typeof p.reason === 'string' ? p.reason.trim() : '';
+        if (p.override !== true || reason.length === 0) {
+          throw new OperationError(
+            'permission_denied',
+            `Refusing to overwrite protected page '${slug}' (linked from decisions/). Use --override with --reason to force.`,
+            'Supply both --override and --reason to overwrite a protected page',
+          );
+        }
+        ctx.logger.info(`put_page protected-page override for '${slug}': ${reason}`);
       }
     }
 
@@ -925,8 +958,10 @@ const put_page: Operation = {
           ingested_via: provenanceVia,
           ingested_at: new Date().toISOString(),
           source_kind: provenanceVia,
+          written_by: `${ctx.agentIdentity.name} <${ctx.agentIdentity.email}>`,
         },
         logger: ctx.logger,
+        agentIdentity: ctx.agentIdentity,
       });
     } else if (isSandboxSubagent) {
       writeThrough = { written: false, skipped: 'subagent_sandbox' };

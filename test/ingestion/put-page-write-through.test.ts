@@ -77,6 +77,7 @@ function makeCtx(overrides: Partial<OperationContext> = {}): OperationContext {
     logger,
     dryRun: false,
     remote: false,
+    agentIdentity: { name: 'Test Agent', email: 'test-agent@example.com' },
     sourceId: 'default',
     ...overrides,
   };

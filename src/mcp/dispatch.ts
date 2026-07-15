@@ -197,12 +197,18 @@ export function buildOperationContext(
   params: Record<string, unknown>,
   opts: DispatchOpts = {},
 ): OperationContext {
+  const agentName = opts.auth?.clientName ?? opts.auth?.clientId ?? 'remote-mcp';
+  const agentEmail = opts.auth?.clientId
+    ? `${opts.auth.clientId}@mcp.gbrain.local`
+    : 'remote-mcp@mcp.gbrain.local';
+
   return {
     engine,
     config: loadConfig() || { engine: 'postgres' },
     logger: opts.logger || stderrLogger,
     dryRun: !!params.dry_run,
     remote: opts.remote ?? true,
+    agentIdentity: { name: agentName, email: agentEmail },
     takesHoldersAllowList: opts.takesHoldersAllowList,
     // v0.34 D4: sourceId is REQUIRED at the type level. Auto-fill 'default'
     // for single-source brains and any caller who didn't resolve a sourceId.

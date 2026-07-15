@@ -10,7 +10,8 @@ import { installSignalHandlers as installCleanupSignalHandlers } from './core/pr
 installCleanupSignalHandlers();
 
 import { readFileSync, existsSync, unlinkSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
+import { hostname } from 'os';
 import {
   readUpdateCache,
   isCacheFresh,
@@ -799,6 +800,37 @@ async function makeContext(engine: BrainEngine, params: Record<string, unknown>)
     // to the cross-source view (D16 back-compat path).
     sourceId = undefined;
   }
+  // Resolve agent identity for write attribution.
+  // Priority: GBRAIN_AGENT_NAME + GBRAIN_AGENT_EMAIL env vars > git config in brain repo > OS user.
+  let agentIdentity: { name: string; email: string } | undefined;
+  const envName = process.env.GBRAIN_AGENT_NAME;
+  const envEmail = process.env.GBRAIN_AGENT_EMAIL;
+  if (envName && envEmail) {
+    agentIdentity = { name: envName, email: envEmail };
+  } else {
+    try {
+      const repoPath = await engine.getConfig('sync.repo_path');
+      if (repoPath) {
+        const gitName = execFileSync('git', ['-C', repoPath, 'config', '--get', 'user.name'], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+        }).trim();
+        const gitEmail = execFileSync('git', ['-C', repoPath, 'config', '--get', 'user.email'], {
+          encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+        }).trim();
+        // Reject the anonymous default — that's the bug this guard closes.
+        if (gitName && gitEmail && !(gitName === 'gbrain' && gitEmail === 'gbrain@localhost')) {
+          agentIdentity = { name: gitName, email: gitEmail };
+        }
+      }
+    } catch {
+      // git not available or not configured; fall back to OS user below.
+    }
+    if (!agentIdentity) {
+      const osUser = process.env.USER || process.env.USERNAME || 'unknown';
+      agentIdentity = { name: osUser, email: `${osUser}@${hostname()}` };
+    }
+  }
+
   return {
     engine,
     config: loadConfig() || { engine: 'postgres' },
@@ -807,6 +839,7 @@ async function makeContext(engine: BrainEngine, params: Record<string, unknown>)
     // Local CLI invocation — the user owns the machine; do not apply remote-caller
     // confinement (e.g., cwd-locked file_upload).
     remote: false,
+    agentIdentity,
     cliOpts: getCliOptions(),
     // v0.34 D4: sourceId is REQUIRED at the type level. Fall back to 'default'
     // when resolveSourceId returned undefined (fresh pre-init brain, no sources
